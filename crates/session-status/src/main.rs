@@ -570,6 +570,11 @@ fn hook_session_start(input: &Value) -> Result<(), String> {
 
     let cstatus = transcript_sibling(transcript_path, "cstatus");
 
+    // Ensure the project directory exists (may be missing on first run in a new repo)
+    if let Some(dir) = cstatus.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("create project dir: {}", e))?;
+    }
+
     // Write initial .cstatus
     let status = StatusInfo {
         session_id: session_id.to_string(),
