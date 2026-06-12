@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::env;
 use std::ffi::CString;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::os::unix::process::{parent_id, CommandExt};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
@@ -955,7 +955,7 @@ fn run() -> Result<(), String> {
     }
 
     // Hook mode — requires piped stdin
-    if atty::is(atty::Stream::Stdin) {
+    if io::stdin().is_terminal() {
         print_help();
         return Err("no input provided (stdin is a terminal)".to_string());
     }
