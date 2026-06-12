@@ -3,7 +3,7 @@ use std::env;
 use std::ffi::CString;
 use std::fs;
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
-use std::os::unix::process::{parent_id, CommandExt};
+use std::os::unix::process::{CommandExt, parent_id};
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 use std::thread;
@@ -229,17 +229,17 @@ impl DaemonState {
 
         // Compaction detection via agentId for long compactions that spawn
         // a compact agent (agentId prefixed with "acompact-")
-        if !self.compacting && self.state != SessionState::Idle {
-            if let Some(agent_id) = v.get("agentId").and_then(|a| a.as_str()) {
-                if agent_id.starts_with("acompact-") {
-                    self.compacting = true;
-                    self.state = SessionState::Compacting;
-                    if !self.activity.is_empty() {
-                        self.activity = format!("compacting ({})", self.activity);
-                    } else {
-                        self.activity = "compacting".to_string();
-                    }
-                }
+        if !self.compacting
+            && self.state != SessionState::Idle
+            && let Some(agent_id) = v.get("agentId").and_then(|a| a.as_str())
+            && agent_id.starts_with("acompact-")
+        {
+            self.compacting = true;
+            self.state = SessionState::Compacting;
+            if !self.activity.is_empty() {
+                self.activity = format!("compacting ({})", self.activity);
+            } else {
+                self.activity = "compacting".to_string();
             }
         }
 
@@ -365,12 +365,10 @@ impl DaemonState {
             match block_type {
                 "tool_result" => {
                     has_tool_result = true;
-                    if !is_async {
-                        if let Some(tool_use_id) =
-                            block.get("tool_use_id").and_then(|i| i.as_str())
-                        {
-                            self.active_agents.remove(tool_use_id);
-                        }
+                    if !is_async
+                        && let Some(tool_use_id) = block.get("tool_use_id").and_then(|i| i.as_str())
+                    {
+                        self.active_agents.remove(tool_use_id);
                     }
                 }
                 "text" => {
@@ -480,11 +478,7 @@ impl DaemonState {
                     continue;
                 }
                 // Get the last paragraph (after the last blank line)
-                let last_paragraph = text
-                    .rsplit("\n\n")
-                    .next()
-                    .unwrap_or(text)
-                    .trim();
+                let last_paragraph = text.rsplit("\n\n").next().unwrap_or(text).trim();
                 return last_paragraph.contains('?');
             }
         }
@@ -591,14 +585,13 @@ fn hook_session_start(input: &Value) -> Result<(), String> {
 
     // Check if a daemon is already running (e.g. session resume)
     let cpid_path = transcript_sibling(transcript_path, "cpid");
-    if let Ok(pid_str) = fs::read_to_string(&cpid_path) {
-        if let Ok(daemon_pid) = pid_str.trim().parse::<u32>() {
-            if pid_is_alive(daemon_pid) {
-                // Daemon already running — just update .cstatus and notify
-                post_darwin_notification();
-                return Ok(());
-            }
-        }
+    if let Ok(pid_str) = fs::read_to_string(&cpid_path)
+        && let Ok(daemon_pid) = pid_str.trim().parse::<u32>()
+        && pid_is_alive(daemon_pid)
+    {
+        // Daemon already running — just update .cstatus and notify
+        post_darwin_notification();
+        return Ok(());
     }
 
     // Spawn daemon — clean up .cstatus if spawn fails
@@ -906,9 +899,13 @@ fn print_help() {
     eprintln!("Claude Status plugin hook daemon for the Claude Status macOS menu bar app");
     eprintln!();
     eprintln!("USAGE:");
-    eprintln!("  session-status              Hook mode (reads JSON from stdin, invoked by Claude Code)");
+    eprintln!(
+        "  session-status              Hook mode (reads JSON from stdin, invoked by Claude Code)"
+    );
     eprintln!("  session-status --signal     Signal mode (writes .csignal for running daemon)");
-    eprintln!("  session-status --daemon     Daemon mode (tails JSONL transcript, maintains state)");
+    eprintln!(
+        "  session-status --daemon     Daemon mode (tails JSONL transcript, maintains state)"
+    );
     eprintln!();
     eprintln!("OPTIONS:");
     eprintln!("  -h, --help       Print this help message");
