@@ -29,11 +29,27 @@ fn post_darwin_notification() {
     }
 }
 
+/// Subset of `proc_bsdinfo` (libproc, private) we care about for `pbi_ppid`.
+/// Layout must match the kernel's struct exactly — see the size assertion below.
+/// `pbi_ppid` lives at offset 16, immediately after `pbi_pid` at offset 12.
+#[repr(C)]
+struct ProcBsdInfo {
+    pbi_flags: u32,    // 0
+    pbi_status: u32,   // 4
+    pbi_xstatus: u32,  // 8
+    pbi_pid: u32,      // 12
+    pbi_ppid: u32,     // 16
+}
+
+// Tripwire: `pbi_ppid` must stay at offset 16. If Apple ever reorders the
+// leading fields, this build will fail loudly instead of silently reading
+// the wrong field (which is exactly the bug this function had — it read
+// `pbi_gid` at offset 24 for years).
+const _: () = assert!(std::mem::offset_of!(ProcBsdInfo, pbi_ppid) == 16);
+
 fn get_ppid_of(pid: u32) -> Option<u32> {
     const PROC_PIDTBSDINFO: libc::c_int = 3;
     const PROC_PIDTBSDINFO_SIZE: libc::c_int = 136;
-
-    let mut info = vec![0u8; PROC_PIDTBSDINFO_SIZE as usize];
 
     unsafe extern "C" {
         fn proc_pidinfo(
@@ -45,12 +61,18 @@ fn get_ppid_of(pid: u32) -> Option<u32> {
         ) -> libc::c_int;
     }
 
+    // The kernel requires the full 136-byte buffer for PROC_PIDTBSDINFO
+    // (it copies `sizeof(proc_bsdinfo)` bytes regardless of what we ask for,
+    // and returns an error if the buffer is too small). We allocate the
+    // full size and cast a view to read the fields we care about.
+    let mut buf = [0u8; PROC_PIDTBSDINFO_SIZE as usize];
+
     let ret = unsafe {
         proc_pidinfo(
             pid as libc::c_int,
             PROC_PIDTBSDINFO,
             0,
-            info.as_mut_ptr() as *mut libc::c_void,
+            buf.as_mut_ptr() as *mut libc::c_void,
             PROC_PIDTBSDINFO_SIZE,
         )
     };
@@ -59,8 +81,15 @@ fn get_ppid_of(pid: u32) -> Option<u32> {
         return None;
     }
 
-    let ppid = u32::from_ne_bytes([info[24], info[25], info[26], info[27]]);
-    if ppid == 0 { None } else { Some(ppid) }
+    // Safety: buf is 136 bytes, ProcBsdInfo's first 20 bytes (pbi_flags
+    // through pbi_ppid) fit in that buffer, and the offset_of assertion
+    // above guarantees pbi_ppid is at the right place.
+    let info = unsafe { &*(buf.as_ptr() as *const ProcBsdInfo) };
+    if info.pbi_ppid == 0 {
+        None
+    } else {
+        Some(info.pbi_ppid)
+    }
 }
 
 fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
@@ -1741,9 +1770,13 @@ mod tests {
 
     #[test]
     fn get_ppid_of_current_process() {
-        let ppid = get_ppid_of(process::id());
-        assert!(ppid.is_some());
-        assert!(ppid.unwrap() > 0);
+        // The real ppid, from libc, must match what the kernel reports.
+        // (The previous version of this test only checked `> 0`, which also
+        // passed for `pbi_gid` (== 20 on macOS) — that's how the offset bug
+        // got through CI for years.)
+        let expected = unsafe { libc::getppid() } as u32;
+        let actual = get_ppid_of(process::id());
+        assert_eq!(actual, Some(expected));
     }
 
     #[test]
